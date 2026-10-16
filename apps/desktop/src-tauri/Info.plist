@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- @author jvz -->
+<!-- PureFlow watermark: jvz | Original author of PureFlow; see LICENSE. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>LSUIElement</key><true/>
+  <key>CFBundleDisplayName</key><string>净流 PureFlow</string>
+  <key>NSLocationUsageDescription</key><string>仅用于读取当前 Wi-Fi 名称并按网络归属本地流量统计，不记录位置坐标。</string>
+  <key>NSLocationWhenInUseUsageDescription</key><string>仅用于读取当前 Wi-Fi 名称并按网络归属本地流量统计，不记录位置坐标。</string>
+</dict></plist>

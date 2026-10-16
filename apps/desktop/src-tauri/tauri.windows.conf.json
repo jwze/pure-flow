@@ -1,0 +1,22 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "beforeDevCommand": "node scripts/dev-server-windows.mjs",
+    "devUrl": "http://127.0.0.1:1420"
+  },
+  "bundle": {
+    "publisher": "jvz",
+    "copyright": "Copyright (c) 2026 jvz (PureFlow); Developed by jvz; see bundled LICENSE.",
+    "shortDescription": "本地流量采集、进程排行与历史统计 · Developed by jvz",
+    "longDescription": "净流 PureFlow Windows 托盘工具；实时流量、进程排行和本地历史查询。Developed by jvz. PureFlow watermark: jvz | Original author of PureFlow; see LICENSE.",
+    "targets": ["nsis"],
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
+      "nsis": { "compression": "lzma", "template": "windows/installer.nsi", "installMode": "perMachine" }
+    },
+    "resources": {
+      "../../../LICENSE": "LICENSE",
+      "helper/pureflow-collector.exe": "helper/pureflow-collector.exe"
+    }
+  }
+}

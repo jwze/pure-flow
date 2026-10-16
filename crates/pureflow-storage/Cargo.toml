@@ -1,0 +1,16 @@
+# @author jvz
+# PureFlow watermark: jvz | Original author of PureFlow; see LICENSE.
+[package]
+name = "pureflow-storage"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+
+[dependencies]
+pureflow-core = { path = "../pureflow-core" }
+serde = { version = "1", features = ["derive"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+chrono = "0.4"
