@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "PureFlow",
+  "version": "0.1.0",
+  "identifier": "xyz.115613.pureflow",
+  "build": {
+    "beforeDevCommand": "node scripts/build-helper.mjs --dev && node scripts/dev-server.mjs",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "node scripts/build-helper.mjs && npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{
+      "label": "main",
+      "title": "净流 PureFlow · 本机流量",
+      "width": 380,
+      "height": 580,
+      "minWidth": 300,
+      "minHeight": 300,
+      "create": false,
+      "visible": false,
+      "decorations": false,
+      "resizable": false,
+      "skipTaskbar": true,
+      "alwaysOnTop": true,
+      "shadow": true
+    }],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; object-src 'none'; frame-src 'none'; base-uri 'self'",
+      "capabilities": ["main"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "publisher": "jvz",
+    "copyright": "Copyright (c) 2026 jvz (PureFlow); Developed by jvz; see bundled LICENSE.",
+    "resources": { "../../../LICENSE": "LICENSE" },
+    "targets": ["app"],
+    "category": "Utility",
+    "shortDescription": "本地流量采集、进程排行与历史统计 · Developed by jvz",
+    "longDescription": "净流 PureFlow 菜单栏／托盘工具；实时流量、进程排行和本地历史查询。Developed by jvz. PureFlow watermark: jvz | Original author of PureFlow; see LICENSE.",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "macOS": { "minimumSystemVersion": "13.0" }
+  }
+}

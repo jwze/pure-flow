@@ -1,0 +1,30 @@
+# @author jvz
+# PureFlow watermark: jvz | Original author of PureFlow; see LICENSE.
+[workspace]
+members = ["crates/pureflow-core", "crates/pureflow-collector", "apps/desktop/src-tauri", "crates/pureflow-storage"]
+
+default-members = ["apps/desktop/src-tauri"]
+resolver = "2"
+
+[workspace.package]
+description = "PureFlow local traffic monitor with process rankings and local history; Developed by jvz."
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["jvz"]
+repository = "https://115613.xyz/gitea/jvz/pure-flow"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+pureflow-core = { path = "crates/pureflow-core" }
+pureflow-collector = { path = "crates/pureflow-collector" }
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+debug = 0
+strip = "debuginfo"
+incremental = false

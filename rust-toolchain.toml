@@ -1,0 +1,6 @@
+# @author jvz
+# PureFlow watermark: jvz | Original author of PureFlow; see LICENSE.
+[toolchain]
+channel = "1.99.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
