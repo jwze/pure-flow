@@ -1,0 +1,191 @@
+# @author jvz
+# PureFlow watermark: jvz | Original author of PureFlow; see LICENSE.
+name: Build desktop releases
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v[0-9]*.[0-9]*.[0-9]*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      toolchain: ${{ steps.config.outputs.toolchain }}
+      version: ${{ steps.config.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+      - name: Check versions and read the pinned Rust toolchain
+        id: config
+        shell: node {0}
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          const fs = require('node:fs');
+          const json = path => JSON.parse(fs.readFileSync(path, 'utf8'));
+          const cargo = fs.readFileSync('Cargo.toml', 'utf8');
+          const workspace = cargo.match(/^\[workspace\.package\]\s*\r?\n([\s\S]*?)(?=^\[|$(?![\s\S]))/m)?.[1];
+          const version = workspace?.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+          if (!/^\d+\.\d+\.\d+$/.test(version ?? '')) {
+            throw new Error('Expected a stable x.y.z version in Cargo.toml');
+          }
+          const versions = {
+            'Cargo.toml': version,
+            'tauri.conf.json': json('apps/desktop/src-tauri/tauri.conf.json').version,
+            'package.json': json('apps/desktop/package.json').version,
+            'package-lock.json': json('apps/desktop/package-lock.json').version,
+            'package-lock.json packages root': json('apps/desktop/package-lock.json').packages[''].version,
+          };
+          for (const [file, value] of Object.entries(versions)) {
+            if (value !== version) throw new Error(`${file}: ${value} != ${version}`);
+          }
+          if (process.env.REF_TYPE === 'tag' && process.env.REF_NAME !== `v${version}`) {
+            throw new Error(`Tag must be v${version}, got ${process.env.REF_NAME}`);
+          }
+          const toolchain = fs.readFileSync('rust-toolchain.toml', 'utf8')
+            .match(/^channel\s*=\s*"([^"]+)"/m)?.[1];
+          if (!/^\d+\.\d+\.\d+$/.test(toolchain ?? '')) {
+            throw new Error('Expected a pinned x.y.z Rust toolchain');
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `toolchain=${toolchain}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
+          console.log(`Validated PureFlow ${version}; Rust ${toolchain}`);
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macos-14 is an Apple Silicon (ARM64) hosted runner.
+          - platform: macos-arm64
+            runner: macos-14
+            target: aarch64-apple-darwin
+            asset-template: PureFlow-VERSION-macos-arm64.zip
+          - platform: windows-x64
+            runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            asset-template: PureFlow_VERSION_x64-setup.exe
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - name: Install the project's Rust toolchain and target
+        shell: bash
+        env:
+          RUST_TOOLCHAIN: ${{ needs.validate.outputs.toolchain }}
+          RUST_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt --component clippy --target "$RUST_TARGET"
+          rustc --version
+          cargo --version
+      - name: Package macOS (ad-hoc signed, not notarized)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: bash scripts/package-desktop-macos.sh
+      - name: Package Windows (unsigned installer)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/package-desktop-windows.ps1
+      # Both scripts stage deliverables in the repository-root dist/, not the
+      # frontend's apps/desktop/dist/ or the platform-specific target/.../bundle/.
+      - name: Verify the platform package and SHA-256
+        id: package
+        shell: node {0}
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          ASSET_TEMPLATE: ${{ matrix.asset-template }}
+        run: |
+          const fs = require('node:fs');
+          const { createHash } = require('node:crypto');
+          const asset = process.env.ASSET_TEMPLATE.replace('VERSION', process.env.RELEASE_VERSION);
+          const archive = `dist/${asset}`;
+          const checksum = `${archive}.sha256`;
+          if (!fs.statSync(archive).isFile() || fs.statSync(archive).size === 0) {
+            throw new Error(`Missing or empty package: ${archive}`);
+          }
+          const expected = fs.readFileSync(checksum, 'utf8').trim().split(/\s+/);
+          const actual = createHash('sha256').update(fs.readFileSync(archive)).digest('hex');
+          if (expected.length !== 2 || expected[0] !== actual || expected[1] !== asset) {
+            throw new Error(`Invalid SHA-256 or filename in ${checksum}`);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `asset=${asset}\n`);
+          console.log(`Verified ${archive} and ${checksum}`);
+      - name: Upload installer and SHA-256
+        uses: actions/upload-artifact@v4
+        with:
+          name: PureFlow-${{ matrix.platform }}
+          path: |
+            dist/${{ steps.package.outputs.asset }}
+            dist/${{ steps.package.outputs.asset }}.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Prepare GitHub Release draft
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: PureFlow-*
+          path: dist
+          merge-multiple: true
+      - name: Create or update a draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Query failures must stop the job, not be mistaken for a missing release.
+          releases=$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" \
+            --jq '.[] | [.tag_name, .draft] | @tsv')
+          found=false
+          while IFS=$'\t' read -r tag draft; do
+            if [[ "$tag" == "$RELEASE_TAG" ]]; then
+              # Never silently replace assets in an already published release.
+              if [[ "$draft" != 'true' ]]; then
+                echo 'Release is already published; refusing to overwrite its assets.' >&2
+                exit 1
+              fi
+              found=true
+              break
+            fi
+          done <<< "$releases"
+          if [[ "$found" == 'true' ]]; then
+            gh release upload "$RELEASE_TAG" dist/* --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/* \
+              --verify-tag --draft --title "PureFlow $RELEASE_TAG" --generate-notes
+          fi
