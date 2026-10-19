@@ -2944,7 +2944,7 @@ dependencies = [
 
 [[package]]
 name = "pureflow-collector"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "libc",
  "objc2",
@@ -2956,7 +2956,7 @@ dependencies = [
 
 [[package]]
 name = "pureflow-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -2964,7 +2964,7 @@ dependencies = [
 
 [[package]]
 name = "pureflow-desktop"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ctrlc",
  "libc",
@@ -2992,7 +2992,7 @@ dependencies = [
 
 [[package]]
 name = "pureflow-storage"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "pureflow-core",

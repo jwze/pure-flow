@@ -39,7 +39,10 @@ struct Life {
     cache_error: Option<String>,
     panel_error: Option<String>,
     about_pending: bool,
+    #[cfg(not(windows))]
     last_blur: Option<Instant>,
+    #[cfg(windows)]
+    focus: crate::popup_focus::PopupFocus,
 }
 struct Lifecycle {
     inner: Mutex<Life>,
@@ -179,6 +182,16 @@ struct PendingTray {
 }
 
 pub fn install(app: &tauri::AppHandle) -> tauri::Result<Updater> {
+    app.manage(crate::shell_diagnostics::Journal::new(
+        app.path()
+            .app_local_data_dir()
+            .ok()
+            .map(|root| root.join("logs").join("popup.log")),
+    ));
+    journal(
+        app,
+        &format!("shell-start version={}", app.package_info().version),
+    );
     let (wake, events) = app.state::<Monitor>().subscribe();
     let life = Arc::new(Lifecycle {
         #[cfg(not(windows))]
@@ -240,23 +253,64 @@ pub fn install(app: &tauri::AppHandle) -> tauri::Result<Updater> {
             _ => {}
         })
         .on_tray_icon_event(|tray, event| match event {
+            #[cfg(windows)]
+            TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Down,
+                ..
+            } => {
+                let app = tray.app_handle();
+                app.state::<Arc<Lifecycle>>()
+                    .inner
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .focus
+                    .tray_down();
+                journal(app, "tray-left-down");
+            }
             TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
                 ..
             } => {
                 let app = tray.app_handle();
-                let blurred = app
-                    .state::<Arc<Lifecycle>>()
-                    .inner
-                    .lock()
-                    .ok()
-                    .and_then(|s| s.last_blur)
-                    .is_some_and(|last| last.elapsed() < Duration::from_millis(300));
-                if blurred {
-                    let _ = hide_panel(app);
-                } else {
-                    let _ = toggle_panel(app);
+                #[cfg(windows)]
+                {
+                    let show = app
+                        .state::<Arc<Lifecycle>>()
+                        .inner
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .focus
+                        .tray_up_should_show();
+                    journal(
+                        app,
+                        if show {
+                            "tray-left-up show"
+                        } else {
+                            "tray-left-up hide"
+                        },
+                    );
+                    if show {
+                        let _ = show_panel(app);
+                    } else {
+                        let _ = hide_panel(app);
+                    }
+                }
+                #[cfg(not(windows))]
+                {
+                    let blurred = app
+                        .state::<Arc<Lifecycle>>()
+                        .inner
+                        .lock()
+                        .ok()
+                        .and_then(|s| s.last_blur)
+                        .is_some_and(|last| last.elapsed() < Duration::from_millis(300));
+                    if blurred {
+                        let _ = hide_panel(app);
+                    } else {
+                        let _ = toggle_panel(app);
+                    }
                 }
             }
             TrayIconEvent::Click {
@@ -298,6 +352,26 @@ fn run_worker(
     let mut previous = None;
     let mut previous_revision = None;
     while !stop.load(Ordering::Acquire) {
+        #[cfg(windows)]
+        {
+            let revision = life
+                .inner
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .focus
+                .take_due(Instant::now());
+            if let Some(revision) = revision {
+                let handle = app.clone();
+                let closing = stop.clone();
+                if let Err(error) = app.run_on_main_thread(move || {
+                    if !closing.load(Ordering::Acquire) {
+                        confirm_blur(&handle, revision);
+                    }
+                }) {
+                    journal(&app, &format!("focus-check-queue-error {error}"));
+                }
+            }
+        }
         let destroyed = {
             let mut state = life.inner.lock().unwrap_or_else(|e| e.into_inner());
             std::mem::take(&mut state.destroyed_ready)
@@ -366,7 +440,7 @@ fn run_worker(
                 }
             }
         }
-        let deadline = {
+        let (deadline, release_deadline) = {
             let state = life.inner.lock().unwrap_or_else(|e| e.into_inner());
             #[cfg(windows)]
             let cleanup_deadline = if state.cleanup_ready && state.holds == 0 {
@@ -374,26 +448,28 @@ fn run_worker(
             } else {
                 None
             };
-            #[cfg(windows)]
-            if cleanup_deadline.is_some() {
-                cleanup_deadline
-            } else if state.holds == 0
-                && !state.release_queued
-                && !state.cleaning
-                && !state.destroying
-            {
-                state.hidden_since.map(|hidden| hidden + RELEASE_AFTER)
-            } else {
-                None
-            }
             #[cfg(not(windows))]
-            if state.holds == 0 && !state.release_queued && !state.cleaning && !state.destroying {
-                state.hidden_since.map(|hidden| hidden + RELEASE_AFTER)
-            } else {
-                None
-            }
+            let cleanup_deadline: Option<Instant> = None;
+            let release_deadline = cleanup_deadline.or_else(|| {
+                if state.holds == 0 && !state.release_queued && !state.cleaning && !state.destroying
+                {
+                    state.hidden_since.map(|hidden| hidden + RELEASE_AFTER)
+                } else {
+                    None
+                }
+            });
+            #[cfg(windows)]
+            let deadline = state
+                .focus
+                .deadline()
+                .into_iter()
+                .chain(release_deadline)
+                .min();
+            #[cfg(not(windows))]
+            let deadline = release_deadline;
+            (deadline, release_deadline)
         };
-        if deadline.is_some_and(|at| at <= Instant::now()) {
+        if release_deadline.is_some_and(|at| at <= Instant::now()) {
             #[cfg(windows)]
             {
                 let state = life.inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -579,6 +655,62 @@ pub fn request_cache_cleanup(app: &tauri::AppHandle) -> Result<String, String> {
     life.wake();
     Ok("已安排清理：弹层连续收起 60 秒后释放界面并清理缓存；重新打开会延后清理，历史记录不受影响。".into())
 }
+fn journal(app: &tauri::AppHandle, event: &str) {
+    if let Some(log) = app.try_state::<crate::shell_diagnostics::Journal>() {
+        log.record(event);
+    }
+}
+
+#[cfg(windows)]
+fn confirm_blur(app: &tauri::AppHandle, revision: u64) {
+    let life = app.state::<Arc<Lifecycle>>();
+    if !life
+        .inner
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .focus
+        .is_current(revision)
+    {
+        journal(app, "focus-check-cancelled");
+        return;
+    }
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let foreground = crate::shell_diagnostics::foreground(&window);
+    journal(
+        app,
+        &format!(
+            "focus-check panel_foreground={} foreground_class={}",
+            foreground.panel, foreground.class
+        ),
+    );
+    // Native foreground ownership is authoritative. WebView2's queued LostFocus
+    // can be stale even when the HWND (or one of its children) is already active.
+    if foreground.panel {
+        life.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .focus
+            .confirmed();
+    } else {
+        let retry = life
+            .inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .focus
+            .retry_shell_activation(foreground.shell, Instant::now());
+        if retry {
+            journal(app, "focus-retry-shell-activation");
+            report_native(app, window.set_focus());
+            life.wake();
+        } else {
+            journal(app, "hide-confirmed-blur");
+            report_native(app, hide_native(app));
+        }
+    }
+}
+
 fn panel(app: &tauri::AppHandle) -> tauri::Result<WebviewWindow> {
     // Only called on GUI thread: no creation mutex can deadlock WebView creation.
     if let Some(window) = app.get_webview_window("main") {
@@ -596,17 +728,34 @@ fn panel(app: &tauri::AppHandle) -> tauri::Result<WebviewWindow> {
     let builder = builder.incognito(true);
     #[cfg(windows)]
     let builder = builder.data_directory(app.path().app_cache_dir()?.join("webview"));
+    journal(app, "panel-create-begin");
     let window = builder.build()?;
     let handle = app.clone();
     window.on_window_event(move |event| match event {
-        tauri::WindowEvent::Focused(false) => {
-            handle
-                .state::<Arc<Lifecycle>>()
-                .inner
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .last_blur = Some(Instant::now());
-            let _ = hide_panel(&handle);
+        tauri::WindowEvent::Focused(focused) => {
+            journal(&handle, &format!("focus-event focused={focused}"));
+            #[cfg(windows)]
+            {
+                let life = handle.state::<Arc<Lifecycle>>();
+                let mut state = life.inner.lock().unwrap_or_else(|e| e.into_inner());
+                if *focused {
+                    state.focus.focused();
+                } else {
+                    state.focus.blurred(Instant::now());
+                }
+                drop(state);
+                life.wake();
+            }
+            #[cfg(not(windows))]
+            if !focused {
+                handle
+                    .state::<Arc<Lifecycle>>()
+                    .inner
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .last_blur = Some(Instant::now());
+                let _ = hide_panel(&handle);
+            }
         }
         tauri::WindowEvent::CloseRequested { api, .. } => {
             api.prevent_close();
@@ -624,6 +773,7 @@ fn panel(app: &tauri::AppHandle) -> tauri::Result<WebviewWindow> {
         }
         _ => {}
     });
+    journal(app, "panel-create-end");
     Ok(window)
 }
 fn show_native(app: &tauri::AppHandle) -> tauri::Result<()> {
@@ -680,8 +830,17 @@ fn show_native(app: &tauri::AppHandle) -> tauri::Result<()> {
         window.set_size(PhysicalSize::new(result.width, result.height))?;
         window.set_position(PhysicalPosition::new(result.x, result.y))?;
     }
+    journal(app, "show-begin");
+    #[cfg(windows)]
+    life.inner
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .focus
+        .shown(Instant::now());
     window.show()?;
     window.set_focus()?;
+    life.wake();
+    journal(app, "show-requested");
     #[cfg(target_os = "macos")]
     if let Some(marker) = objc2::MainThreadMarker::new() {
         let application = objc2_app_kit::NSApplication::sharedApplication(marker);
@@ -707,6 +866,14 @@ fn show_native(app: &tauri::AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 fn hide_native(app: &tauri::AppHandle) -> tauri::Result<()> {
+    journal(app, "hide-requested");
+    #[cfg(windows)]
+    app.state::<Arc<Lifecycle>>()
+        .inner
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .focus
+        .hidden();
     if let Some(window) = app.get_webview_window("main") {
         window.emit("panel-visibility", false)?;
         window.hide()?;
@@ -756,10 +923,15 @@ fn finish_release(app: &tauri::AppHandle) {
 }
 fn report_native(app: &tauri::AppHandle, result: tauri::Result<()>) {
     if let Err(error) = result {
+        journal(app, &format!("native-error {error}"));
         let visible = state(app).panel_visible;
         let life = app.state::<Arc<Lifecycle>>();
         let mut state = life.inner.lock().unwrap_or_else(|e| e.into_inner());
         state.panel_error = Some(error.to_string());
+        #[cfg(windows)]
+        if !visible {
+            state.focus.hidden();
+        }
         if !visible && !state.destroying && !state.cleaning && state.hidden_since.is_none() {
             state.hidden_since = Some(Instant::now());
         }
@@ -789,6 +961,7 @@ pub fn hide_panel(app: &tauri::AppHandle) -> tauri::Result<()> {
     let handle = app.clone();
     app.run_on_main_thread(move || report_native(&handle, hide_native(&handle)))
 }
+#[cfg(not(windows))]
 pub fn toggle_panel(app: &tauri::AppHandle) -> tauri::Result<()> {
     let handle = app.clone();
     app.run_on_main_thread(move || {

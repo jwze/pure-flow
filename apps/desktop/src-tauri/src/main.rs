@@ -11,10 +11,13 @@ mod model;
 mod network_permission;
 mod panel_state;
 mod placement;
+#[cfg(windows)]
+mod popup_focus;
 mod preferences;
 mod runtime;
 mod sampling_policy;
 mod shell;
+mod shell_diagnostics;
 mod singleton;
 mod storage_paths;
 #[cfg(target_os = "macos")]

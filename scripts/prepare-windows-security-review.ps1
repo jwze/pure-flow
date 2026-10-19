@@ -8,7 +8,7 @@ $root = Split-Path -Parent $PSScriptRoot
 Push-Location $root
 try {
     New-Item -ItemType Directory -Force $OutputDirectory | Out-Null
-    $files = @('target/x86_64-pc-windows-msvc/release/pureflow.exe', 'target/x86_64-pc-windows-msvc/release/pureflow-collector.exe', 'target/x86_64-pc-windows-msvc/release/bundle/nsis/PureFlow_0.1.0_x64-setup.exe')
+    $files = @('target/x86_64-pc-windows-msvc/release/pureflow.exe', 'target/x86_64-pc-windows-msvc/release/pureflow-collector.exe', 'target/x86_64-pc-windows-msvc/release/bundle/nsis/PureFlow_0.1.1_x64-setup.exe')
     $manifest = foreach ($file in $files) {
         if (!(Test-Path $file)) { [pscustomobject]@{Path=$file;Exists=$false}; continue }
         $item = Get-Item $file

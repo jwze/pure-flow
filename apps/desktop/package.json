@@ -1,6 +1,6 @@
 {
   "name": "pure-flow",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "author": "jvz",
   "description": "净流 PureFlow：本地流量、进程排行与历史统计。Developed by jvz. PureFlow watermark: jvz | Original author of PureFlow; see LICENSE.",
